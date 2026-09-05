@@ -148,6 +148,33 @@ class _BlockParameterization:
         given the stateless data `sd` returned by `torch_stateless_data`."""
         raise NotImplementedError
 
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        """Return the _Polynomial for one block_data entry.
+
+        Evaluating the returned polynomial at the block's parameter vector
+        (placed at offset ``pio``) must equal the corresponding value produced
+        by ``params_to_block_data`` (i.e. ``blk.block_data[index]``).
+
+        Parameters
+        ----------
+        blk : LindbladCoefficientBlock
+            The owning coefficient block.
+        index : int or tuple of ints
+            Integer coefficient index for vector blocks, or an (i, j) tuple
+            for matrix blocks.
+        pio : int
+            Global parameter index offset for polynomial variables.
+        mpv : int
+            Maximum number of polynomial variables.
+
+        Returns
+        -------
+        Polynomial
+        """
+        raise NotImplementedError
+
+    _block_data_polynomial = _coefficient_polynomial
+
 
 class _StaticParam(_BlockParameterization):
     """Zero-parameter block: block_data is a fixed constant."""
@@ -183,6 +210,10 @@ class _StaticParam(_BlockParameterization):
     def block_data_torch(sd, t_param):
         return sd[0]
 
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        val = blk.block_data[index]
+        return _Polynomial({(): val}, mpv)
+
 
 class _RealVectorElements(_BlockParameterization):
     """Unconstrained real-vector parameterization: block_data == v (identity map).  Shared numeric
@@ -209,6 +240,9 @@ class _RealVectorElements(_BlockParameterization):
     @staticmethod
     def block_data_torch(sd, t_param):
         return t_param
+
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        return _Polynomial({(pio + index,): 1.0}, mpv)
 
 
 class _HamElements(_RealVectorElements):
@@ -283,6 +317,10 @@ class _DiagCholesky(_BlockParameterization):
     def block_data_torch(sd, t_param):
         return t_param**2
 
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        var = pio + index
+        return _Polynomial({(var, var): 1.0}, mpv)
+
 
 class _Depol(_BlockParameterization):
     """Depolarizing: a single nonnegative coefficient shared by all diagonal generators
@@ -322,6 +360,10 @@ class _Depol(_BlockParameterization):
         n = sd[0]
         return (t_param[0]**2) * _torch.ones(n, dtype=t_param.dtype, device=t_param.device)
 
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        var = pio
+        return _Polynomial({(var, var): 1.0}, mpv)
+
 
 class _RelDepol(_BlockParameterization):
     """Relative depolarizing: a single (possibly negative) coefficient shared by all diagonal
@@ -358,6 +400,9 @@ class _RelDepol(_BlockParameterization):
         import torch as _torch
         n = sd[0]
         return t_param[0] * _torch.ones(n, dtype=t_param.dtype, device=t_param.device)
+
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        return _Polynomial({(pio,): 1.0}, mpv)
 
 
 class _OtherElements(_BlockParameterization):
@@ -437,6 +482,21 @@ class _OtherElements(_BlockParameterization):
         lowPT = _torch.tril(P.T, -1)
         Imag = lowPT - lowPT.T
         return _torch.complex(Re, Imag)
+
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        i, j = index
+        num_bels = len(blk._bel_labels)
+        if i == j:
+            var_ii = pio + (i * num_bels + i)
+            return _Polynomial({(var_ii,): 1.0}, mpv)
+        elif i > j:
+            var_ij = pio + (i * num_bels + j)
+            var_ji = pio + (j * num_bels + i)
+            return _Polynomial({(var_ij,): 1.0, (var_ji,): 1.0j}, mpv)
+        else:  # i < j
+            var_ji = pio + (j * num_bels + i)
+            var_ij = pio + (i * num_bels + j)
+            return _Polynomial({(var_ji,): 1.0, (var_ij,): -1.0j}, mpv)
 
 
 class _OtherCholesky(_BlockParameterization):
@@ -574,6 +634,25 @@ class _OtherCholesky(_BlockParameterization):
         Cim = _torch.tril(P.T, -1)
         C = _torch.complex(Cre, Cim)
         return C @ C.conj().T
+
+    def _coefficient_polynomial(self, blk, index, pio, mpv):
+        i, j = index
+        num_bels = len(blk._bel_labels)
+
+        def i_re(a, b): return pio + (a * num_bels + b)
+        def i_im(a, b): return pio + (b * num_bels + a)
+
+        polyTerms = {}
+        for k in range(0, min(i, j) + 1):
+            if k <= i and k <= j:
+                polyTerms[(i_re(i, k), i_re(j, k))] = 1.0
+            if k <= i and k < j:
+                polyTerms[(i_re(i, k), i_im(j, k))] = -1.0j
+            if k < i and k <= j:
+                polyTerms[(i_im(i, k), i_re(j, k))] = 1.0j
+            if k < i and k < j:
+                polyTerms[(i_im(i, k), i_im(j, k))] = 1.0
+        return _Polynomial(polyTerms, mpv)
 
 
 class LindbladCoefficientBlock(_NicelySerializable):

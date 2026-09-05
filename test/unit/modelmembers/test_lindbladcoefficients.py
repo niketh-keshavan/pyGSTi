@@ -477,3 +477,41 @@ def test_superop_deriv_other_matrix_structured(case):
     d_struct = blk.superop_deriv_wrt_params(G_struct, v, superops_are_flat=False)  # (d2, d2, n, n)
     d_flat = blk.superop_deriv_wrt_params(G_flat, v, superops_are_flat=True)        # (d2, d2, n*n)
     assert np.allclose(d_struct.reshape(d_flat.shape), d_flat, atol=1e-9)
+
+
+@pytest.mark.parametrize("case", ALL_CASES, ids=_config_as_string)
+def test_coefficient_polynomial_contract(case):
+    """Evaluating _coefficient_polynomial at the parameter vector equals the corresponding block_data entry."""
+    bname, dim, bt, pm = case
+    blk = make_block(*case, data_seed=42)
+    nP = blk.num_params
+    rng = np.random.default_rng(123)
+    if pm == 'static':
+        if blk.block_data.ndim == 2:
+            n = blk.block_data.shape[0]
+            A = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
+            blk.block_data[:, :] = A @ A.conj().T
+        else:
+            blk.block_data[:] = rng.standard_normal(blk.block_data.shape)
+        v = np.empty(0, 'd')
+    else:
+        v = blk.to_vector().copy()
+
+    mpv = 1000
+    for pio in (0, 5):
+        full_v = np.zeros(pio + nP + 10, dtype=complex)
+        if nP > 0:
+            full_v[pio:pio + nP] = v
+
+        if blk.block_data.ndim == 2:
+            n = blk.block_data.shape[0]
+            for i in range(n):
+                for j in range(n):
+                    poly = blk._parameterization._coefficient_polynomial(blk, (i, j), pio, mpv)
+                    eval_val = poly.evaluate(full_v)
+                    assert np.isclose(eval_val, blk.block_data[i, j], atol=1e-12)
+        else:
+            for k in range(len(blk.block_data)):
+                poly = blk._parameterization._coefficient_polynomial(blk, k, pio, mpv)
+                eval_val = poly.evaluate(full_v)
+                assert np.isclose(eval_val, blk.block_data[k], atol=1e-12)
