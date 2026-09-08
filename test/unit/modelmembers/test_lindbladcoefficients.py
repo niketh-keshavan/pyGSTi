@@ -535,7 +535,10 @@ def test_coefficient_polynomial_contract(case):
 
 
 # =====================================================================================================
-# Semantic regression: rank-1 term superoperator reconstruction vs. dense LindbladErrorgen.to_dense()
+# Semantic regression tests verifying rank-1 term objects against dense LindbladErrorgen.to_dense():
+# reconstructs the standard-basis error-generator superoperator from create_lindblad_term_objects
+# and asserts equivalence with the dense superoperator across the full (block_type, param_mode)
+# validity matrix, nontrivial parameter offsets, and both compiled and pure-Python term evotypes.
 # =====================================================================================================
 
 def _std_superop_from_terms(blk, params, pio=0, mpv=100, evotype='statevec_slow'):
